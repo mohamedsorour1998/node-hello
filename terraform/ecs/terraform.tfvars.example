@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (gitignored) and adjust.
+region            = "us-east-1"
+image             = "ghcr.io/mohamedsorour1998/node-hello:latest"
+newrelic_app_name = "node-hello"
+
+# Optional. Leave empty to run without New Relic. NEVER commit a real key.
+newrelic_license_key = ""

@@ -6,9 +6,11 @@ workflow:
 - **Containerized** with a multi-stage, non-root Dockerfile.
 - **CI/CD** with GitHub Actions: lint → test → build → push to GitHub
   Container Registry (GHCR).
-- **Deployed** locally with Terraform using the Docker provider (driven here by
-  rootless **Podman**, which exposes a Docker-compatible API).
-- **Monitored** with New Relic (APM + application log forwarding).
+- **Deployed** with Terraform two ways:
+  - **locally** via the Docker provider (driven here by rootless **Podman**), and
+  - to **AWS ECS (Fargate)** using the `terraform-aws-modules/ecs` module.
+- **Monitored** with New Relic (APM + application log forwarding), plus
+  CloudWatch Logs on ECS.
 
 > Forked from [`johnpapa/node-hello`](https://github.com/johnpapa/node-hello)
 > and extended for this assignment.
@@ -24,6 +26,8 @@ workflow:
 5. [Container image (Docker / Podman)](#container-image-docker--podman)
 6. [CI/CD pipeline (GitHub Actions)](#cicd-pipeline-github-actions)
 7. [Deployment with Terraform](#deployment-with-terraform)
+   - [Local (Docker / Podman)](#local-docker--podman)
+   - [AWS ECS (Fargate)](#aws-ecs-fargate)
 8. [Monitoring & logging (New Relic)](#monitoring--logging-new-relic)
 9. [Configuration reference](#configuration-reference)
 10. [Assumptions](#assumptions)
@@ -47,11 +51,20 @@ workflow:
                                               │
                     ghcr.io/mohamedsorour1998/node-hello:latest
                                               │
-                       terraform apply        ▼
-   Operator ───────────────────────▶ Docker/Podman provider ──▶ Container
-                                                                   │  stdout logs + APM
-                                                                   ▼
-                                                              New Relic
+                    ┌─────────────────────────┴─────────────────────────┐
+             terraform apply                                     terraform apply
+             (terraform/)                                        (terraform/ecs/)
+                    │                                                    │
+                    ▼                                                    ▼
+        Docker / Podman provider                          AWS ECS Fargate service
+        local container :8080                             task w/ public IP :3000
+                    │                                        │  + CloudWatch Logs
+                    └───────────────────┬────────────────────┘
+                                        ▼
+                            stdout JSON logs + APM
+                                        │
+                                        ▼
+                                    New Relic
 ```
 
 ## Repository layout
@@ -74,7 +87,13 @@ workflow:
 │   ├── variables.tf
 │   ├── main.tf
 │   ├── outputs.tf
-│   └── terraform.tfvars.example
+│   ├── terraform.tfvars.example
+│   └── ecs/                 # AWS ECS Fargate deployment
+│       ├── versions.tf
+│       ├── variables.tf
+│       ├── main.tf
+│       ├── outputs.tf
+│       └── terraform.tfvars.example
 ├── .env.example
 └── README.md
 ```
@@ -182,7 +201,7 @@ Watch it:
 gh run watch          # or: gh run list / gh run view --log
 ```
 
-The required `NEW_RELIC_LICENSE_KEY` secret (see below) can be set with:
+The `NEW_RELIC_LICENSE_KEY` secret (used for runtime monitoring) can be set with:
 
 ```bash
 gh secret set NEW_RELIC_LICENSE_KEY -R mohamedsorour1998/node-hello
@@ -190,7 +209,7 @@ gh secret set NEW_RELIC_LICENSE_KEY -R mohamedsorour1998/node-hello
 
 ### Making the image pullable
 
-Packages published to GHCR are **private by default**. To let Terraform (or
+Packages published to GHCR are **private by default**. To let Terraform/ECS (or
 anyone) pull without credentials, mark the package **public** once:
 
 `GitHub → your profile → Packages → node-hello → Package settings → Change
@@ -204,13 +223,16 @@ echo $CR_PAT | podman login ghcr.io -u mohamedsorour1998 --password-stdin
 
 ## Deployment with Terraform
 
-Terraform (`terraform/`) uses the [`kreuzwerker/docker`] provider to run the
-container locally. Because Podman exposes a Docker-compatible API socket, the
-same provider works against Podman with **no daemon and no root**.
+The assignment allows a local Docker-provider deployment **or** a cloud free
+tier — this repo implements **both**.
+
+### Local (Docker / Podman)
+
+Terraform in [`terraform/`](terraform/) uses the [`kreuzwerker/docker`] provider
+to run the container locally. Because Podman exposes a Docker-compatible API
+socket, the same provider works against Podman with **no daemon and no root**.
 
 [`kreuzwerker/docker`]: https://registry.terraform.io/providers/kreuzwerker/docker/latest
-
-### Prerequisites
 
 Enable the rootless Podman API socket (one-time):
 
@@ -222,8 +244,6 @@ ls -l /run/user/$(id -u)/podman/podman.sock   # confirm it exists
 (Alternatively, point `docker_host` at a real Docker daemon such as
 `unix:///var/run/docker.sock`.)
 
-### Configure
-
 ```bash
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
@@ -232,44 +252,73 @@ cp terraform.tfvars.example terraform.tfvars
 #   - either keep the GHCR image (make the package public), or
 #     set build_local = true to build straight from the Dockerfile
 #   - optionally set newrelic_license_key
+
+terraform init
+terraform apply
+
+curl "$(terraform output -raw app_url)"       # Hello Node!
+curl "$(terraform output -raw health_url)"    # {"status":"ok",...}
+
+terraform destroy
 ```
 
 `terraform.tfvars` is **gitignored** so your key never gets committed. You can
-also pass the key via the environment instead:
+also pass the key via `export TF_VAR_newrelic_license_key="<your-key>"`.
+
+| Goal                                   | Setting                                       |
+| -------------------------------------- | --------------------------------------------- |
+| Run the image published by CI (GHCR)   | `build_local = false` (default) + public pkg  |
+| Build & run straight from source       | `build_local = true`                          |
+| Use real Docker instead of Podman      | `docker_host = "unix:///var/run/docker.sock"` |
+
+### AWS ECS (Fargate)
+
+Terraform in [`terraform/ecs/`](terraform/ecs/) runs the same GHCR image as an
+**AWS ECS Fargate** service (serverless containers), using the community
+[`terraform-aws-modules/ecs`] module.
+
+[`terraform-aws-modules/ecs`]: https://registry.terraform.io/modules/terraform-aws-modules/ecs/aws/latest
+
+It creates: an ECS **cluster**, a **Fargate service** (1 task) in the default
+VPC's public subnets with a **public IP**, a **task definition** for the image,
+an IAM **task-execution role**, a **security group**, a **CloudWatch Logs**
+group (awslogs driver), and — when a New Relic key is provided — an **SSM
+SecureString** injected via ECS `secrets` (so the key never appears in the task
+definition).
 
 ```bash
-export TF_VAR_newrelic_license_key="<your-key>"
-```
-
-### Apply
-
-```bash
+cd terraform/ecs
+cp terraform.tfvars.example terraform.tfvars   # optionally set newrelic_license_key
 terraform init
-terraform apply        # review the plan, then approve
-
-# Outputs include the URLs:
-curl "$(terraform output -raw app_url)"       # Hello Node!
-curl "$(terraform output -raw health_url)"    # {"status":"ok",...}
+terraform apply                                # ~2-3 min (waits for steady state)
 ```
 
-### Destroy
+The task's public IP is assigned at runtime, so fetch it and test:
+
+```bash
+# Print (and run) the helper command that resolves the running task's IP:
+eval "$(terraform output -raw get_public_ip_command)"        # -> <PUBLIC_IP>
+
+curl http://<PUBLIC_IP>:3000/                  # Hello Node!
+curl http://<PUBLIC_IP>:3000/health            # {"status":"ok",...}
+```
+
+Tear it down when finished:
 
 ```bash
 terraform destroy
 ```
 
-### Deployment options
+Requires AWS credentials (`aws configure` / environment). This was verified
+end-to-end: the service came up, served traffic on the task's public IP, shipped
+logs to CloudWatch, and reported to New Relic (the agent auto-detects the ECS
+environment), then destroyed cleanly.
 
-| Goal                                   | Setting                                     |
-| -------------------------------------- | ------------------------------------------- |
-| Run the image published by CI (GHCR)   | `build_local = false` (default) + public pkg |
-| Build & run straight from source       | `build_local = true`                        |
-| Use real Docker instead of Podman      | `docker_host = "unix:///var/run/docker.sock"` |
-
-> **Cloud note:** the assignment allows a local Docker-provider deployment
-> _or_ a cloud free tier. This repo implements the **local** option. The same
-> image in GHCR could be deployed to ECS/EKS/a k8s cluster by swapping the
-> Terraform provider/resources; the app is stateless and container-ready.
+> **Security & cost:** the task's security group opens the app port to
+> `0.0.0.0/0` for demo reachability and the app is unauthenticated — fine for a
+> throwaway hello-world, **not** production. For real use, front it with an ALB +
+> HTTPS/WAF, tighten the security group, and use private subnets + NAT. Fargate
+> and CloudWatch bill by usage, so run `terraform destroy` when done.
 
 ## Monitoring & logging (New Relic)
 
@@ -285,10 +334,11 @@ The New Relic Node.js agent is included as a dependency and configured in
 - Sensitive request/response headers (cookies, authorization) are excluded from
   captured attributes.
 
-Enable it by providing the key at runtime — via `terraform.tfvars`
-(`newrelic_license_key`), `TF_VAR_newrelic_license_key`, `.env`, or
-`podman run -e NEW_RELIC_LICENSE_KEY=...`. Data then appears in New Relic under
-the app name **`node-hello`** (APM & Services, and Logs).
+Provide the key at runtime — via `terraform.tfvars` (`newrelic_license_key`),
+`TF_VAR_newrelic_license_key`, `.env`, or `podman run -e NEW_RELIC_LICENSE_KEY=...`.
+On ECS the key is stored in **SSM Parameter Store** and injected as a container
+secret. Data appears in New Relic under the app name **`node-hello`** (APM &
+Services, and Logs). On ECS, container stdout also lands in **CloudWatch Logs**.
 
 ## Configuration reference
 
@@ -309,18 +359,21 @@ the app name **`node-hello`** (APM & Services, and Logs).
 - **Registry** → GitHub Container Registry (GHCR) was chosen over Docker Hub
   because it authenticates with the built-in `GITHUB_TOKEN`, needing no extra
   credentials. The image name follows the repo: `ghcr.io/<owner>/node-hello`.
-- **Deployment target** → the **local Docker-provider** option was chosen. The
-  environment has no Docker daemon and no root, so **rootless Podman** provides
-  the Docker-compatible API the Terraform provider talks to. Commands use
-  `podman`, but `docker` is interchangeable.
+- **Deployment target** → both options in the brief are implemented: a **local**
+  Docker-provider deploy (rootless **Podman**, since the box has no Docker
+  daemon and no root) and an **AWS ECS Fargate** deploy. Commands use `podman`,
+  but `docker` is interchangeable.
+- **ECS shape** → Fargate task with a **public IP** in the default VPC's public
+  subnets and no ALB, to keep the demo cheap and simple. A production setup would
+  add an ALB, HTTPS, private subnets, and a tighter security group.
 - **`docker_host` default** assumes UID `1000`
   (`unix:///run/user/1000/podman/podman.sock`). Adjust to your `id -u`.
 - **GHCR visibility** → images are private by default; the package must be made
-  public (or `podman login` used) for a credential-free `terraform apply`.
+  public (or `podman login` used) for a credential-free pull.
   `build_local = true` avoids this entirely for a self-contained local run.
 - **New Relic** → the provided license key is treated as a secret: stored as a
-  GitHub Actions secret and in gitignored local files (`.env`,
-  `terraform.tfvars`), never committed. US data-center endpoint assumed.
+  GitHub Actions secret, in gitignored local files (`.env`, `terraform.tfvars`),
+  and as an SSM SecureString on ECS — never committed. US data-center assumed.
 - **Security** → this is a public, unauthenticated demo endpoint by design (no
   sensitive data). A real deployment would add TLS, authentication, and network
   controls (e.g., an ingress/load balancer).
