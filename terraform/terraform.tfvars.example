@@ -1,0 +1,17 @@
+# Copy to `terraform.tfvars` (gitignored) and adjust as needed.
+
+# Podman rootless socket. Replace 1000 with your `id -u` if different.
+docker_host = "unix:///run/user/1000/podman/podman.sock"
+
+# Image to deploy. Use the GHCR image published by CI (make the package public
+# or run `podman login ghcr.io`), or set build_local = true to build locally.
+image       = "ghcr.io/mohamedsorour1998/node-hello:latest"
+build_local = false
+
+host_port     = 8080
+internal_port = 3000
+log_level     = "info"
+
+# New Relic (optional). Leave empty to disable. NEVER commit a real key.
+newrelic_app_name    = "node-hello"
+newrelic_license_key = ""

@@ -1,20 +1,38 @@
 {
   "name": "node-hello",
   "version": "1.0.0",
-  "description": "",
+  "description": "Simple Node.js hello-world app with CI/CD, containerization, Terraform deployment and New Relic monitoring.",
   "main": "index.js",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/johnpapa/node-hello.git"
+    "url": "git+https://github.com/mohamedsorour1998/node-hello.git"
   },
-  "keywords": [],
+  "keywords": [
+    "node",
+    "docker",
+    "podman",
+    "ci-cd",
+    "github-actions",
+    "terraform",
+    "newrelic"
+  ],
   "author": "",
   "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/johnpapa/node-hello/issues"
+  "dependencies": {
+    "newrelic": "14.3.0"
   },
-  "homepage": "https://github.com/johnpapa/node-hello#readme"
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.7.0",
+    "globals": "17.7.0"
+  }
 }

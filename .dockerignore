@@ -1,0 +1,34 @@
+# Dependencies (installed fresh inside the image)
+node_modules
+npm-debug.log*
+
+# Version control & CI
+.git
+.gitignore
+.github
+
+# Editor / tooling / lint
+.vscode
+.prettierrc
+eslint.config.js
+
+# Docs
+*.md
+
+# Infrastructure (not needed inside the app image)
+terraform
+
+# Tests
+test
+
+# Secrets & local env
+.env
+.env.*
+
+# Logs
+*.log
+newrelic_agent.log
+
+# Docker
+Dockerfile
+.dockerignore
