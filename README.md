@@ -321,7 +321,7 @@ environment), then destroyed cleanly.
 > and CloudWatch bill by usage, so run `terraform destroy` when done.
 
 ## Monitoring & logging (New Relic)
-
+<img width="2546" height="1252" alt="image" src="https://github.com/user-attachments/assets/d9232a69-17a7-4d72-9af4-f039ac7378de" />
 The New Relic Node.js agent is included as a dependency and configured in
 [`newrelic.js`](newrelic.js) entirely from environment variables.
 
